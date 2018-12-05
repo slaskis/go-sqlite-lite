@@ -5,8 +5,12 @@ package sqlite3
 
 import (
 	"bytes"
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/md5"
+	"crypto/rand"
 	"errors"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -1257,90 +1261,77 @@ func TestGoFunc(T *testing.T) {
 
 	c := t.open(":memory:")
 
-	t.exec(c, "CREATE TABLE x(a); INSERT INTO x VALUES(1);")
-
-	scan := func(stmt *Stmt) {
-		ctypes := stmt.ColumnTypes()
-		any := make([]interface{}, len(ctypes))
-		for i, t := range ctypes {
-			switch t {
-			case INTEGER:
-				v := 0
-				any[i] = &v
-			case TEXT:
-				v := ""
-				any[i] = &v
-			case FLOAT:
-				v := 0.0
-				any[i] = &v
-			case BLOB:
-				v := []byte{}
-				any[i] = &v
-			case NULL:
-				any[i] = nil
-			}
-		}
-		t.scan(stmt, any...)
-
-		vars := make([]interface{}, len(ctypes))
-		for i, t := range ctypes {
-			switch t {
-			case INTEGER:
-				vars[i] = *(any[i].(*int))
-			case TEXT:
-				vars[i] = *(any[i].(*string))
-			case FLOAT:
-				vars[i] = *(any[i].(*float64))
-			case BLOB:
-				vars[i] = *(any[i].(*[]byte))
-			case NULL:
-				vars[i] = nil
-			}
-		}
-		fmt.Println(vars...)
-	}
-	scanAll := func(stmt *Stmt) {
-		for {
-			ok, err := stmt.Step()
-			if err != nil {
-				t.Fatal(err)
-			}
-			if ok {
-				scan(stmt)
-			} else {
-				break
-			}
-		}
-	}
-
-	_ = scan
-	_ = scanAll
-
 	err := c.CreateFunction("md5", func(s string) string {
-		t.Log("in md5 func", s)
 		return fmt.Sprintf("%x", md5.Sum([]byte(s)))
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// s := t.prepare(c, "PRAGMA compile_options;")
-	// scanAll(s)
+	// encryption function (https://golang.org/src/crypto/cipher/example_test.go)
+	err = c.CreateFunction("encrypt_aes", func(s string, k string) (string, error) {
+		key, _ := hex.DecodeString(k)
+		block, err := aes.NewCipher(key)
+		if err != nil {
+			return "", err
+		}
+		nonce := make([]byte, 12)
+		if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+			return "", err
+		}
+		aesgcm, err := cipher.NewGCM(block)
+		if err != nil {
+			return "", err
+		}
+		plaintext := []byte(s)
+		ciphertext := aesgcm.Seal(nil, nonce, plaintext, nil)
+		return fmt.Sprintf("%x:%x", ciphertext, nonce), nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	// s = t.prepare(c, "PRAGMA pragma_list;")
-	// scanAll(s)
+	// decryption function (https://golang.org/src/crypto/cipher/example_test.go)
+	err = c.CreateFunction("decrypt_aes", func(c, k string) (string, error) {
+		parts := strings.Split(c, ":")
+		key, _ := hex.DecodeString(k)
+		ciphertext, _ := hex.DecodeString(parts[0])
+		nonce, _ := hex.DecodeString(parts[1])
 
-	// s = t.prepare(c, "PRAGMA function_list;")
-	// scanAll(s)
+		block, err := aes.NewCipher(key)
+		if err != nil {
+			return "", err
+		}
+		aesgcm, err := cipher.NewGCM(block)
+		if err != nil {
+			return "", err
+		}
+		plaintext, err := aesgcm.Open(nil, nonce, ciphertext, nil)
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("%s", plaintext), nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	var m string
 	s := t.prepare(c, "SELECT md5($1);", "hello")
 	t.step(s, true)
 	t.scan(s, &m)
 	t.Log(m)
-
 	if m != fmt.Sprintf("%x", md5.Sum([]byte("hello"))) {
 		t.Fatalf("expected md5 of hello. got %s", m)
+	}
+
+	m = ""
+	s = t.prepare(c, "SELECT decrypt_aes(encrypt_aes($1, $2), $2);", "hello", "6368616e676520746869732070617373776f726420746f206120736563726574")
+	t.step(s, true)
+	t.scan(s, &m)
+	t.Log(m)
+	if m != "hello" {
+		t.Fatalf("expected decrypted of hello. got %s", m)
 	}
 
 	// name, num_params,
