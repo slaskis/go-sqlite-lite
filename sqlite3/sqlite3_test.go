@@ -1268,6 +1268,17 @@ func TestGoFunc(T *testing.T) {
 		t.Fatal(err)
 	}
 
+	err = c.CreateFunction("sum_of_ints", func(i ...int) int {
+		y := 0
+		for _, x := range i {
+			y += x
+		}
+		return y
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	// encryption function (https://golang.org/src/crypto/cipher/example_test.go)
 	err = c.CreateFunction("encrypt_aes", func(s string, k string) (string, error) {
 		key, _ := hex.DecodeString(k)
@@ -1333,4 +1344,14 @@ func TestGoFunc(T *testing.T) {
 	if m != "hello" {
 		t.Fatalf("expected decrypted of hello. got %s", m)
 	}
+
+	var n int
+	s = t.prepare(c, "SELECT sum_of_ints($1, $2, $3, $4);", 1, 2, 3, 4)
+	t.step(s, true)
+	t.scan(s, &n)
+	t.Log(n)
+	if n != 10 {
+		t.Fatalf("expected sum_of_ints to be 10. got %d", n)
+	}
+
 }
