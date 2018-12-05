@@ -29,6 +29,8 @@ package sqlite3
 #cgo CFLAGS: -DSQLITE_ENABLE_STAT4=1
 #cgo CFLAGS: -DSQLITE_ENABLE_UNLOCK_NOTIFY
 #cgo CFLAGS: -DSQLITE_ENABLE_UPDATE_DELETE_LIMIT=1
+#cgo CFLAGS: -DSQLITE_INTROSPECTION_PRAGMAS
+#cgo CFLAGS: -DSQLITE_OMIT_AUTHORIZATION=1
 #cgo CFLAGS: -DSQLITE_OMIT_AUTOINIT=1
 #cgo CFLAGS: -DSQLITE_OMIT_DEPRECATED=1
 #cgo CFLAGS: -DSQLITE_OMIT_PROGRESS_CALLBACK=1
@@ -57,6 +59,7 @@ package sqlite3
 // Fix "_localtime32(0): not defined" linker error.
 #cgo windows,386 CFLAGS: -D_localtime32=localtime
 
+#include <stdlib.h>
 #include <assert.h>
 #include <pthread.h>
 #include "sqlite3.h"
@@ -102,12 +105,17 @@ int go_commit_hook(void*);
 void go_rollback_hook(void*);
 void go_update_hook(void* data, int op,const char *db, const char *tbl, sqlite3_int64 row);
 int go_set_authorizer(void* data, int op, const char *arg1, const char *arg2, const char *db, const char *entity);
+void go_sqlite_func(sqlite3_context*, int, sqlite3_value**);
 
 SET(busy_handler)
 SET(commit_hook)
 SET(rollback_hook)
 SET(update_hook)
 SET(set_authorizer)
+
+// A workaround for passing a pointer function into sqlite3_create_function
+// https://github.com/golang/go/issues/19835
+typedef void (*closure)();
 
 // A pointer to an instance of this structure is passed as the user-context
 // pointer when registering for an unlock-notify callback.
@@ -244,6 +252,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"reflect"
 	"time"
 	"unsafe"
 )
@@ -260,6 +269,7 @@ var commitRegistry = newRegistry()
 var rollbackRegistry = newRegistry()
 var updateRegistry = newRegistry()
 var authorizerRegistry = newRegistry()
+var callbackRegistry = newRegistry()
 
 func init() {
 	// Initialize SQLite (required with SQLITE_OMIT_AUTOINIT).
@@ -1336,4 +1346,60 @@ func (c *Conn) AuthorizerFunc(f AuthorizerFunc) (prev AuthorizerFunc) {
 	C.set_set_authorizer(c.db, unsafe.Pointer(&c.authorizerIdx), cBool(f != nil))
 	prev, _ = authorizerRegistry.unregister(prevIdx).(AuthorizerFunc)
 	return
+}
+
+func (c *Conn) CreateFunction(name string, fn interface{}) error {
+	t := reflect.TypeOf(fn)
+
+	sf := sqliteFunc{
+		fn: reflect.ValueOf(fn),
+	}
+
+	if t.Kind() != reflect.Func {
+		return pkgErr(MISUSE, "non-function passed to CreateFunction")
+	}
+	if t.NumOut() != 1 && t.NumOut() != 2 {
+		return pkgErr(MISUSE, "SQLite functions must return 1 or 2 values")
+	}
+	if t.NumOut() == 2 && !t.Out(1).Implements(reflect.TypeOf((*error)(nil)).Elem()) {
+		return pkgErr(MISUSE, "Second return value of SQLite function must be error")
+	}
+
+	numArgs := t.NumIn()
+	if t.IsVariadic() {
+		numArgs--
+	}
+	for i := 0; i < numArgs; i++ {
+		conv, err := callbackArg(t.In(i))
+		if err != nil {
+			return err
+		}
+		sf.args = append(sf.args, conv)
+	}
+	if t.IsVariadic() {
+		conv, err := callbackArg(t.In(numArgs).Elem())
+		if err != nil {
+			return err
+		}
+		sf.vars = conv
+		numArgs = -1
+	}
+	conv, err := callbackRet(t.Out(0))
+	if err != nil {
+		return err
+	}
+	sf.ret = conv
+
+	idx := callbackRegistry.register(&sf)
+
+	cname := C.CString(name)
+	defer C.free(unsafe.Pointer(cname))
+
+	fmt.Println("registered sqlite func at", idx)
+
+	rc := C.sqlite3_create_function(c.db, cname, C.int(numArgs), UTF8|DETERMINISTIC, unsafe.Pointer(&idx), C.closure(C.go_sqlite_func), nil, nil)
+	if rc != OK {
+		return libErr(rc, c.db)
+	}
+	return nil
 }

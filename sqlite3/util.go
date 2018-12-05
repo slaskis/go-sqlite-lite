@@ -11,6 +11,7 @@ import "C"
 
 import (
 	"fmt"
+	"math"
 	"reflect"
 	"sync"
 	"unsafe"
@@ -382,4 +383,64 @@ func go_set_authorizer(data unsafe.Pointer, op C.int, arg1, arg2, db, entity *C.
 	idx := *(*int)(data)
 	fn := authorizerRegistry.lookup(idx).(AuthorizerFunc)
 	return C.int(fn(int(op), raw(goStr(arg1)), raw(goStr(arg2)), raw(goStr(db)), raw(goStr(entity))))
+}
+
+type sqliteFunc struct {
+	fn   reflect.Value // always Kind() == reflect.Func
+	args []callbackArgConverter
+	vars callbackArgConverter
+	ret  callbackRetConverter
+}
+
+func (f *sqliteFunc) ConvertArgs(argv []*C.sqlite3_value) ([]reflect.Value, error) {
+	var args []reflect.Value
+	if len(argv) < len(f.args) {
+		return nil, fmt.Errorf("function requires at least %d arguments", len(f.args))
+	}
+
+	for i, arg := range argv[:len(f.args)] {
+		v, err := f.args[i](arg)
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, v)
+	}
+
+	if f.vars != nil {
+		for _, arg := range argv[len(f.args):] {
+			v, err := f.vars(arg)
+			if err != nil {
+				return nil, err
+			}
+			args = append(args, v)
+		}
+	}
+	return args, nil
+}
+
+type callbackArgConverter func(*C.sqlite3_value) (reflect.Value, error)
+type callbackRetConverter func(*C.sqlite3_context, reflect.Value) error
+
+//export go_sqlite_func
+func go_sqlite_func(ctx *C.sqlite3_context, argc int, argv **C.sqlite3_value) {
+	args := (*[(math.MaxInt32 - 1) / unsafe.Sizeof((*C.sqlite3_value)(nil))]*C.sqlite3_value)(unsafe.Pointer(argv))[:argc:argc]
+	idx := *(*int)(C.sqlite3_user_data(ctx))
+	fmt.Println("go_sqlite_func", idx)
+	cb := callbackRegistry.lookup(idx).(*sqliteFunc)
+	vals, err := cb.ConvertArgs(args)
+	if err != nil {
+		callbackError(ctx, err)
+		return
+	}
+	ret := cb.fn.Call(vals)
+	if len(ret) == 2 && ret[1].Interface() != nil {
+		callbackError(ctx, ret[1].Interface().(error))
+		return
+	}
+
+	err = cb.ret(ctx, ret[0])
+	if err != nil {
+		callbackError(ctx, err)
+		return
+	}
 }

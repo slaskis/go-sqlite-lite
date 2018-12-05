@@ -5,6 +5,7 @@ package sqlite3
 
 import (
 	"bytes"
+	"crypto/md5"
 	"errors"
 	"fmt"
 	"io"
@@ -1249,4 +1250,104 @@ func TestOutOfRange(T *testing.T) {
 	if err == nil {
 		t.Fatal("Expected out of range error")
 	}
+}
+
+func TestGoFunc(T *testing.T) {
+	t := begin(T)
+
+	c := t.open(":memory:")
+
+	t.exec(c, "CREATE TABLE x(a); INSERT INTO x VALUES(1);")
+
+	scan := func(stmt *Stmt) {
+		ctypes := stmt.ColumnTypes()
+		any := make([]interface{}, len(ctypes))
+		for i, t := range ctypes {
+			switch t {
+			case INTEGER:
+				v := 0
+				any[i] = &v
+			case TEXT:
+				v := ""
+				any[i] = &v
+			case FLOAT:
+				v := 0.0
+				any[i] = &v
+			case BLOB:
+				v := []byte{}
+				any[i] = &v
+			case NULL:
+				any[i] = nil
+			}
+		}
+		t.scan(stmt, any...)
+
+		vars := make([]interface{}, len(ctypes))
+		for i, t := range ctypes {
+			switch t {
+			case INTEGER:
+				vars[i] = *(any[i].(*int))
+			case TEXT:
+				vars[i] = *(any[i].(*string))
+			case FLOAT:
+				vars[i] = *(any[i].(*float64))
+			case BLOB:
+				vars[i] = *(any[i].(*[]byte))
+			case NULL:
+				vars[i] = nil
+			}
+		}
+		fmt.Println(vars...)
+	}
+	scanAll := func(stmt *Stmt) {
+		for {
+			ok, err := stmt.Step()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ok {
+				scan(stmt)
+			} else {
+				break
+			}
+		}
+	}
+
+	_ = scan
+	_ = scanAll
+
+	err := c.CreateFunction("md5", func(s string) string {
+		t.Log("in md5 func", s)
+		return fmt.Sprintf("%x", md5.Sum([]byte(s)))
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// s := t.prepare(c, "PRAGMA compile_options;")
+	// scanAll(s)
+
+	// s = t.prepare(c, "PRAGMA pragma_list;")
+	// scanAll(s)
+
+	// s = t.prepare(c, "PRAGMA function_list;")
+	// scanAll(s)
+
+	var m string
+	s := t.prepare(c, "SELECT md5($1);", "hello")
+	t.step(s, true)
+	t.scan(s, &m)
+	t.Log(m)
+
+	if m != fmt.Sprintf("%x", md5.Sum([]byte("hello"))) {
+		t.Fatalf("expected md5 of hello. got %s", m)
+	}
+
+	// name, num_params,
+	// conn.CreateAggregate("mysum", MySum)
+}
+
+type Aggregate interface {
+	Step(Value)
+	Finalize() Value
 }

@@ -236,3 +236,21 @@ const (
 	LIMIT_VARIABLE_NUMBER     = C.SQLITE_LIMIT_VARIABLE_NUMBER     // 9
 	LIMIT_TRIGGER_DEPTH       = C.SQLITE_LIMIT_TRIGGER_DEPTH       // 10
 )
+
+// Text Encodings
+// These constant define integer codes that represent the various text encodings supported by SQLite.
+// https://www.sqlite.org/c3ref/c_any.html
+const (
+	UTF8          = C.SQLITE_UTF8          // 1    /* IMP: R-37514-35566 */
+	UTF16LE       = C.SQLITE_UTF16LE       // 2    /* IMP: R-03371-37637 */
+	UTF16BE       = C.SQLITE_UTF16BE       // 3    /* IMP: R-51971-34154 */
+	UTF16         = C.SQLITE_UTF16         // 4    /* Use native byte order */
+	ANY           = C.SQLITE_ANY           // 5    /* Deprecated */
+	UTF16_ALIGNED = C.SQLITE_UTF16_ALIGNED // 8    /* sqlite3_create_collation only */
+)
+
+// Function Flags
+// https://www.sqlite.org/c3ref/c_deterministic.html
+const (
+	DETERMINISTIC = C.SQLITE_DETERMINISTIC // 0x800
+)
