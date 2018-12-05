@@ -105,7 +105,7 @@ int go_commit_hook(void*);
 void go_rollback_hook(void*);
 void go_update_hook(void* data, int op,const char *db, const char *tbl, sqlite3_int64 row);
 int go_set_authorizer(void* data, int op, const char *arg1, const char *arg2, const char *db, const char *entity);
-void go_sqlite_func(sqlite3_context*, int, sqlite3_value**);
+void go_callback_func(sqlite3_context*, int, sqlite3_value**);
 
 SET(busy_handler)
 SET(commit_hook)
@@ -1395,7 +1395,7 @@ func (c *Conn) CreateFunction(name string, fn interface{}) error {
 	cname := C.CString(name)
 	defer C.free(unsafe.Pointer(cname))
 
-	rc := C.sqlite3_create_function(c.db, cname, C.int(numArgs), UTF8|DETERMINISTIC, unsafe.Pointer(&idx), C.closure(C.go_sqlite_func), nil, nil)
+	rc := C.sqlite3_create_function(c.db, cname, C.int(numArgs), UTF8|DETERMINISTIC, unsafe.Pointer(&idx), C.closure(C.go_callback_func), nil, nil)
 	if rc != OK {
 		return libErr(rc, c.db)
 	}
