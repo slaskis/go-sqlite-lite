@@ -425,7 +425,6 @@ type callbackRetConverter func(*C.sqlite3_context, reflect.Value) error
 func go_sqlite_func(ctx *C.sqlite3_context, argc int, argv **C.sqlite3_value) {
 	args := (*[(math.MaxInt32 - 1) / unsafe.Sizeof((*C.sqlite3_value)(nil))]*C.sqlite3_value)(unsafe.Pointer(argv))[:argc:argc]
 	idx := *(*int)(C.sqlite3_user_data(ctx))
-	fmt.Println("go_sqlite_func", idx)
 	cb := callbackRegistry.lookup(idx).(*sqliteFunc)
 	vals, err := cb.ConvertArgs(args)
 	if err != nil {

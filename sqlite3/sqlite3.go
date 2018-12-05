@@ -1348,13 +1348,10 @@ func (c *Conn) AuthorizerFunc(f AuthorizerFunc) (prev AuthorizerFunc) {
 	return
 }
 
+// CreateFunction registers a function which may be invoked from SQL.
+// [https://www.sqlite.org/c3ref/create_function.html]
 func (c *Conn) CreateFunction(name string, fn interface{}) error {
 	t := reflect.TypeOf(fn)
-
-	sf := sqliteFunc{
-		fn: reflect.ValueOf(fn),
-	}
-
 	if t.Kind() != reflect.Func {
 		return pkgErr(MISUSE, "non-function passed to CreateFunction")
 	}
@@ -1365,6 +1362,9 @@ func (c *Conn) CreateFunction(name string, fn interface{}) error {
 		return pkgErr(MISUSE, "Second return value of SQLite function must be error")
 	}
 
+	sf := sqliteFunc{
+		fn: reflect.ValueOf(fn),
+	}
 	numArgs := t.NumIn()
 	if t.IsVariadic() {
 		numArgs--
@@ -1394,8 +1394,6 @@ func (c *Conn) CreateFunction(name string, fn interface{}) error {
 
 	cname := C.CString(name)
 	defer C.free(unsafe.Pointer(cname))
-
-	fmt.Println("registered sqlite func at", idx)
 
 	rc := C.sqlite3_create_function(c.db, cname, C.int(numArgs), UTF8|DETERMINISTIC, unsafe.Pointer(&idx), C.closure(C.go_sqlite_func), nil, nil)
 	if rc != OK {

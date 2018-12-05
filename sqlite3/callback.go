@@ -219,3 +219,39 @@ func callbackRet(typ reflect.Type) (callbackRetConverter, error) {
 func callbackError(ctx *C.sqlite3_context, err error) {
 	C.sqlite3_result_error(ctx, cStr(err.Error()), -1)
 }
+
+type sqliteFunc struct {
+	fn   reflect.Value // always Kind() == reflect.Func
+	args []callbackArgConverter
+	vars callbackArgConverter
+	ret  callbackRetConverter
+}
+
+func (f *sqliteFunc) ConvertArgs(argv []*C.sqlite3_value) ([]reflect.Value, error) {
+	var args []reflect.Value
+	if len(argv) < len(f.args) {
+		return nil, pkgErr(MISUSE, "function requires at least %d arguments", len(f.args))
+	}
+
+	for i, arg := range argv[:len(f.args)] {
+		v, err := f.args[i](arg)
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, v)
+	}
+
+	if f.vars != nil {
+		for _, arg := range argv[len(f.args):] {
+			v, err := f.vars(arg)
+			if err != nil {
+				return nil, err
+			}
+			args = append(args, v)
+		}
+	}
+	return args, nil
+}
+
+type callbackArgConverter func(*C.sqlite3_value) (reflect.Value, error)
+type callbackRetConverter func(*C.sqlite3_context, reflect.Value) error
