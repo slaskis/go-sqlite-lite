@@ -1333,12 +1333,4 @@ func TestGoFunc(T *testing.T) {
 	if m != "hello" {
 		t.Fatalf("expected decrypted of hello. got %s", m)
 	}
-
-	// name, num_params,
-	// conn.CreateAggregate("mysum", MySum)
-}
-
-type Aggregate interface {
-	Step(Value)
-	Finalize() Value
 }
